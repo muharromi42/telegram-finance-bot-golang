@@ -1,0 +1,33 @@
+# Binary hasil build
+/bot
+/telegram-finance-bot
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Output test
+*.test
+*.out
+
+# Dependency vendor (kalau tidak dipakai, biasanya go mod cukup)
+/vendor/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+service-account.json
+*.json.key
+credentials.json
+
+# Log
+*.log
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

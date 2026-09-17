@@ -2,7 +2,6 @@ package parser
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -10,61 +9,129 @@ import (
 	"telegram-finance-bot/internal/model"
 )
 
-// Format pesan yang didukung, contoh:
-//   keluar 50000 makan siang
-//   masuk 2000000 gaji bulanan
-//   keluar 15000 kopi #jajan
-//
-// Kata pertama: jenis transaksi (masuk/keluar)
-// Kata kedua: jumlah (boleh pakai titik/koma ribuan, contoh 50.000)
-// Sisanya: catatan. Kategori opsional ditandai dengan awalan '#'.
-var linePattern = regexp.MustCompile(`(?i)^(masuk|keluar)\s+([\d.,]+)\s*(.*)$`)
-
-// ErrFormatTidakDikenali dikembalikan kalau pesan tidak cocok pola apapun.
-var ErrFormatTidakDikenali = fmt.Errorf("format pesan tidak dikenali, gunakan contoh: keluar 50000 makan siang #jajan")
-
-// Parse mengubah teks pesan menjadi model.Transaction.
-func Parse(text string) (model.Transaction, error) {
-	text = strings.TrimSpace(text)
-	matches := linePattern.FindStringSubmatch(text)
-	if matches == nil {
-		return model.Transaction{}, ErrFormatTidakDikenali
-	}
-
-	txType := model.TransactionType(strings.ToLower(matches[1]))
-
-	amountStr := strings.NewReplacer(".", "", ",", "").Replace(matches[2])
-	amount, err := strconv.ParseFloat(amountStr, 64)
-	if err != nil {
-		return model.Transaction{}, fmt.Errorf("jumlah tidak valid: %q", matches[2])
-	}
-
-	rest := strings.TrimSpace(matches[3])
-	category, note := extractCategory(rest)
-
-	return model.Transaction{
-		Date:     time.Now(),
-		Type:     txType,
-		Amount:   amount,
-		Category: category,
-		Note:     note,
-	}, nil
+// categoryAliases memetakan kata kunci singkat (yang diketik user) ke nama
+// kategori PERSIS seperti yang ada di dropdown SETUP pada spreadsheet.
+// Ini penting supaya data yang ditulis bot valid terhadap data validation
+// yang sudah ada di sheet "Budget Tracking".
+var categoryAliases = map[model.TransactionType]map[string]string{
+	model.TypeIncome: {
+		"gaji":       "Employment",
+		"employment": "Employment",
+		"sampingan":  "Side Hustles",
+		"sidehustle": "Side Hustles",
+		"bisnis":     "Business Income ", // sesuai SETUP (ada trailing space)
+		"business":   "Business Income ",
+		"investasi":  "Investment Income ", // ada trailing space di SETUP
+		"investment": "Investment Income ",
+		"sekali":     "One-time Income",
+		"onetime":    "One-time Income",
+		"lain":       "Other Income",
+		"other":      "Other Income",
+	},
+	model.TypeExpenses: {
+		"rumah":         "Housing",
+		"housing":       "Housing",
+		"makan":         "Food & Groceries",
+		"food":          "Food & Groceries",
+		"utilitas":      "Utilities",
+		"utilities":     "Utilities",
+		"perawatan":     "Personal Care",
+		"personal":      "Personal Care",
+		"asuransi":      "Insurances",
+		"insurance":     "Insurances",
+		"transport":     "Transportation",
+		"transportasi":  "Transportation",
+		"belanja":       "Shopping ", // sesuai SETUP (ada trailing space)
+		"shopping":      "Shopping ",
+		"kesehatan":     "Health/Medical",
+		"health":        "Health/Medical",
+		"cicilan":       "Debt Payments ", // ada trailing space di SETUP
+		"debt":          "Debt Payments ",
+		"hiburan":       "Entertainment",
+		"entertainment": "Entertainment",
+		"liburan":       "Vacation/Travelling",
+		"vacation":      "Vacation/Travelling",
+		"hadiah":        "Gifts/Donations",
+		"donasi":        "Gifts/Donations",
+		"gift":          "Gifts/Donations",
+		"lain":          "Other Expenses",
+		"other":         "Other Expenses",
+	},
+	model.TypeSavings: {
+		"umum":       "General Savings",
+		"general":    "General Savings",
+		"investasi":  "Investments",
+		"investment": "Investments",
+		"darurat":    "Emergency Fund",
+		"emergency":  "Emergency Fund",
+		"cadangan":   "Sinking Fund",
+		"sinking":    "Sinking Fund",
+		"bisnis":     "Business Investment",
+		"business":   "Business Investment",
+	},
 }
 
-// extractCategory mencari token '#kategori' di dalam teks, memisahkannya
-// dari catatan biasa. Kalau tidak ada tag, kategori default "lainnya".
-func extractCategory(rest string) (category, note string) {
-	words := strings.Fields(rest)
-	var noteWords []string
-	category = "lainnya"
+// typeAliases memetakan kata yang diketik user ke TransactionType resmi.
+var typeAliases = map[string]model.TransactionType{
+	"income":   model.TypeIncome,
+	"masuk":    model.TypeIncome,
+	"pemasukan": model.TypeIncome,
+	"gaji":     model.TypeIncome,
 
-	for _, w := range words {
-		if strings.HasPrefix(w, "#") && len(w) > 1 {
-			category = strings.ToLower(strings.TrimPrefix(w, "#"))
-			continue
-		}
-		noteWords = append(noteWords, w)
+	"expenses":    model.TypeExpenses,
+	"expense":     model.TypeExpenses,
+	"keluar":      model.TypeExpenses,
+	"pengeluaran": model.TypeExpenses,
+
+	"savings": model.TypeSavings,
+	"saving":  model.TypeSavings,
+	"nabung":  model.TypeSavings,
+	"tabungan": model.TypeSavings,
+}
+
+// Format pesan yang didukung:
+//   <type> <kategori> <jumlah> <catatan...>
+// Contoh:
+//   expenses food 50000 makan siang
+//   income gaji 5000000 gaji bulan ini
+//   savings darurat 200000 nabung darurat
+func Parse(text string) (model.Transaction, error) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) < 3 {
+		return model.Transaction{}, fmt.Errorf(
+			"format tidak lengkap. Contoh: expenses food 50000 makan siang")
 	}
 
-	return category, strings.Join(noteWords, " ")
+	txType, ok := typeAliases[strings.ToLower(fields[0])]
+	if !ok {
+		return model.Transaction{}, fmt.Errorf(
+			"jenis %q tidak dikenali. Gunakan: income, expenses, atau savings", fields[0])
+	}
+
+	aliasMap := categoryAliases[txType]
+	category, ok := aliasMap[strings.ToLower(fields[1])]
+	if !ok {
+		return model.Transaction{}, fmt.Errorf(
+			"kategori %q tidak dikenali untuk jenis %s. Coba /help untuk lihat daftar kategori",
+			fields[1], txType)
+	}
+
+	amountStr := strings.NewReplacer(".", "", ",", "").Replace(fields[2])
+	amount, err := strconv.ParseFloat(amountStr, 64)
+	if err != nil {
+		return model.Transaction{}, fmt.Errorf("jumlah tidak valid: %q", fields[2])
+	}
+
+	description := ""
+	if len(fields) > 3 {
+		description = strings.Join(fields[3:], " ")
+	}
+
+	return model.Transaction{
+		Date:        time.Now(),
+		Type:        txType,
+		Category:    category,
+		Description: description,
+		Amount:      amount,
+	}, nil
 }

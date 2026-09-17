@@ -47,3 +47,10 @@ keluar 15000 kopi
 ```
 
 Kolom yang ditulis ke sheet: `Tanggal | Jenis | Kategori | Jumlah | Catatan`
+
+## Yang masih perlu kamu sesuaikan
+
+- **Struktur kolom**: kalau template sheet kamu urutan kolomnya beda, ubah `Transaction.ToRow()` di `internal/model/transaction.go`.
+- **Nama tab per bulan**: default pakai format `"September 2026"`, sesuaikan di `internal/telegram/handler.go` kalau template kamu pakai penamaan lain.
+- **Deployment**: untuk production, pertimbangkan pindah dari long polling (`bot.Run`) ke mode webhook agar lebih efisien, terutama kalau deploy di Cloud Run.
+- **Rate limit**: kalau bot dipakai banyak orang, tambahkan queue/throttling sebelum memanggil Sheets API.

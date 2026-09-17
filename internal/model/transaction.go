@@ -2,32 +2,22 @@ package model
 
 import "time"
 
-// TransactionType membedakan pemasukan dan pengeluaran.
+// TransactionType harus persis sama dengan value dropdown di kolom Type
+// pada sheet "Budget Tracking" (data validation: Income,Expenses,Savings).
 type TransactionType string
 
 const (
-	TypeIncome  TransactionType = "masuk"
-	TypeExpense TransactionType = "keluar"
+	TypeIncome   TransactionType = "Income"
+	TypeExpenses TransactionType = "Expenses"
+	TypeSavings  TransactionType = "Savings"
 )
 
-// Transaction merepresentasikan satu baris catatan keuangan.
-// Sesuaikan field ini dengan kolom template spreadsheet kamu.
+// Transaction merepresentasikan satu baris di sheet "Budget Tracking".
 type Transaction struct {
-	Date     time.Time
-	Type     TransactionType
-	Amount   float64
-	Category string
-	Note     string
+	Date        time.Time
+	Type        TransactionType
+	Category    string // harus persis sama dengan salah satu opsi dropdown SETUP
+	Description string
+	Amount      float64
 }
 
-// ToRow mengubah Transaction menjadi slice of interface{} sesuai urutan
-// kolom di spreadsheet: Tanggal | Jenis | Kategori | Jumlah | Catatan
-func (t Transaction) ToRow() []interface{} {
-	return []interface{}{
-		t.Date.Format("2006-01-02"),
-		string(t.Type),
-		t.Category,
-		t.Amount,
-		t.Note,
-	}
-}

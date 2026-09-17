@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
@@ -61,7 +60,7 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 	}
 
 	if msg.IsCommand() {
-		b.handleCommand(ctx, msg)
+		b.handleCommand(msg)
 		return
 	}
 
@@ -71,45 +70,46 @@ func (b *Bot) handleMessage(ctx context.Context, msg *tgbotapi.Message) {
 		return
 	}
 
-	sheetName := b.cfg.DefaultSheetName
-	if sheetName == "" {
-		sheetName = tx.Date.Format("January 2006") // contoh: "September 2026"
-	}
-
-	if err := b.sheetsClient.EnsureSheetExists(ctx, sheetName); err != nil {
-		log.Printf("error ensure sheet: %v", err)
-		b.reply(msg.Chat.ID, "Gagal menyiapkan sheet tujuan, coba lagi nanti.")
-		return
-	}
-
-	if err := b.sheetsClient.AppendTransaction(ctx, sheetName, tx); err != nil {
+	if err := b.sheetsClient.AppendTransaction(ctx, tx); err != nil {
 		log.Printf("error append transaction: %v", err)
 		b.reply(msg.Chat.ID, "Gagal mencatat transaksi, coba lagi nanti.")
 		return
 	}
 
 	confirmation := fmt.Sprintf(
-		"Tercatat!\n%s | %s | Rp%.0f\nKategori: %s\nCatatan: %s",
-		tx.Date.Format("02 Jan 2006"), tx.Type, tx.Amount, tx.Category, tx.Note,
+		"Tercatat ke Budget Tracking!\n%s | %s | Rp%.0f\nKategori: %s\nCatatan: %s",
+		tx.Date.Format("02 Jan 2006"), tx.Type, tx.Amount, tx.Category, tx.Description,
 	)
 	b.reply(msg.Chat.ID, confirmation)
 }
 
-func (b *Bot) handleCommand(ctx context.Context, msg *tgbotapi.Message) {
+func (b *Bot) handleCommand(msg *tgbotapi.Message) {
 	switch msg.Command() {
 	case "start":
-		b.reply(msg.Chat.ID, "Halo! Kirim transaksi dengan format:\nkeluar 50000 makan siang #jajan\nmasuk 2000000 gaji")
+		b.reply(msg.Chat.ID, "Halo! Format pesan: <type> <kategori> <jumlah> <catatan>\nContoh: expenses food 50000 makan siang\nKetik /help untuk daftar lengkap kategori.")
 	case "help":
-		b.reply(msg.Chat.ID, "Format: <masuk/keluar> <jumlah> <catatan> #kategori\nContoh: keluar 15000 kopi #jajan")
+		b.reply(msg.Chat.ID, helpText)
 	default:
 		b.reply(msg.Chat.ID, "Perintah tidak dikenali. Coba /help")
 	}
-	_ = time.Now() // placeholder kalau nanti butuh timestamp command
 }
 
 func (b *Bot) reply(chatID int64, text string) {
-	msg := tgbotapi.NewMessage(chatID, text)
-	if _, err := b.api.Send(msg); err != nil {
+	m := tgbotapi.NewMessage(chatID, text)
+	if _, err := b.api.Send(m); err != nil {
 		log.Printf("gagal kirim balasan: %v", err)
 	}
 }
+
+const helpText = `Format: <type> <kategori> <jumlah> <catatan>
+
+Type yang didukung: income, expenses, savings
+
+Kategori Income: gaji, sampingan, bisnis, investasi, sekali, lain
+Kategori Expenses: rumah, makan, utilitas, perawatan, asuransi, transport, belanja, kesehatan, cicilan, hiburan, liburan, hadiah, lain
+Kategori Savings: umum, investasi, darurat, cadangan, bisnis
+
+Contoh:
+expenses makan 50000 makan siang
+income gaji 5000000 gaji bulan ini
+savings darurat 200000 nabung darurat`

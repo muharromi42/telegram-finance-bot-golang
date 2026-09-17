@@ -10,6 +10,13 @@ import (
 	"telegram-finance-bot/internal/model"
 )
 
+// sheetName adalah nama tab tetap tempat mencatat transaksi.
+const sheetName = "Budget Tracking"
+
+// firstDataRow adalah baris pertama tempat data transaksi dimulai
+// (baris 1-8 dipakai untuk judul & ringkasan, baris 9 adalah header kolom).
+const firstDataRow = 10
+
 // Client membungkus sheets.Service dari Google API.
 type Client struct {
 	svc           *sheetsapi.Service
@@ -17,9 +24,6 @@ type Client struct {
 }
 
 // NewClient membuat client baru menggunakan service account JSON.
-// credentialsPath: path ke file JSON service account.
-// Spreadsheet tujuan harus sudah di-share (akses Editor) ke email
-// service account tersebut.
 func NewClient(ctx context.Context, credentialsPath, spreadsheetID string) (*Client, error) {
 	svc, err := sheetsapi.NewService(ctx, option.WithCredentialsFile(credentialsPath))
 	if err != nil {
@@ -28,62 +32,53 @@ func NewClient(ctx context.Context, credentialsPath, spreadsheetID string) (*Cli
 	return &Client{svc: svc, spreadsheetID: spreadsheetID}, nil
 }
 
-// AppendTransaction menambahkan satu baris transaksi ke sheet/tab tertentu.
-// sheetName harus sudah ada sebagai tab di spreadsheet, contoh "September 2026".
-func (c *Client) AppendTransaction(ctx context.Context, sheetName string, tx model.Transaction) error {
-	valueRange := &sheetsapi.ValueRange{
-		Values: [][]interface{}{tx.ToRow()},
-	}
-
-	// range "SheetName!A:E" berarti "tambahkan di baris kosong pertama
-	// pada kolom A sampai E", Sheets API otomatis mencari baris terakhir.
-	writeRange := fmt.Sprintf("%s!A:E", sheetName)
-
-	_, err := c.svc.Spreadsheets.Values.Append(c.spreadsheetID, writeRange, valueRange).
-		ValueInputOption("USER_ENTERED").
-		InsertDataOption("INSERT_ROWS").
-		Context(ctx).
-		Do()
+// nextEmptyRow mencari baris kosong pertama di kolom C, dimulai dari
+// firstDataRow. Kita tidak pakai Values.Append karena sheet ini punya
+// kolom "spacer" kosong (D dan F) di antara Date/Type/Category, yang
+// membuat algoritma auto-detect tabel bawaan Sheets API salah menebak
+// batas tabel (lihat penjelasan di README/percakapan).
+func (c *Client) nextEmptyRow(ctx context.Context) (int, error) {
+	readRange := fmt.Sprintf("%s!C%d:C3000", sheetName, firstDataRow)
+	resp, err := c.svc.Spreadsheets.Values.Get(c.spreadsheetID, readRange).Context(ctx).Do()
 	if err != nil {
-		return fmt.Errorf("gagal menulis ke sheet %q: %w", sheetName, err)
+		return 0, fmt.Errorf("gagal membaca kolom Date untuk cari baris kosong: %w", err)
 	}
-	return nil
+	// resp.Values hanya berisi baris yang tidak kosong secara berurutan
+	// dari awal range, jadi baris kosong berikutnya = firstDataRow + jumlah baris terisi.
+	return firstDataRow + len(resp.Values), nil
 }
 
-// EnsureSheetExists mengecek apakah tab dengan nama tertentu sudah ada.
-// Kalau belum, sheet baru dibuat dengan header default.
-func (c *Client) EnsureSheetExists(ctx context.Context, sheetName string) error {
-	spreadsheet, err := c.svc.Spreadsheets.Get(c.spreadsheetID).Context(ctx).Do()
+// AppendTransaction menulis satu baris transaksi ke sheet "Budget Tracking"
+// dengan menargetkan kolom secara eksplisit (C, E, dan G:I terpisah),
+// supaya tidak bergantung pada auto-detect tabel yang rawan salah karena
+// ada kolom spacer kosong (D, F) di antara header.
+//
+// Kolom J (Balance) SENGAJA tidak disentuh karena template sudah mengisi
+// formula Balance untuk setiap baris sampai baris 3000.
+func (c *Client) AppendTransaction(ctx context.Context, tx model.Transaction) error {
+	row, err := c.nextEmptyRow(ctx)
 	if err != nil {
-		return fmt.Errorf("gagal membaca metadata spreadsheet: %w", err)
+		return err
 	}
 
-	for _, sheet := range spreadsheet.Sheets {
-		if sheet.Properties.Title == sheetName {
-			return nil // sudah ada
-		}
+	dateRange := fmt.Sprintf("%s!C%d", sheetName, row)
+	typeRange := fmt.Sprintf("%s!E%d", sheetName, row)
+	restRange := fmt.Sprintf("%s!G%d:I%d", sheetName, row, row) // Category, Description, Amount (berdempetan, aman)
+
+	data := []*sheetsapi.ValueRange{
+		{Range: dateRange, Values: [][]interface{}{{tx.Date.Format("2006-01-02")}}},
+		{Range: typeRange, Values: [][]interface{}{{string(tx.Type)}}},
+		{Range: restRange, Values: [][]interface{}{{tx.Category, tx.Description, tx.Amount}}},
 	}
 
-	// Sheet belum ada, buat baru
-	addSheetReq := &sheetsapi.Request{
-		AddSheet: &sheetsapi.AddSheetRequest{
-			Properties: &sheetsapi.SheetProperties{Title: sheetName},
-		},
-	}
-	batchReq := &sheetsapi.BatchUpdateSpreadsheetRequest{
-		Requests: []*sheetsapi.Request{addSheetReq},
-	}
-	if _, err := c.svc.Spreadsheets.BatchUpdate(c.spreadsheetID, batchReq).Context(ctx).Do(); err != nil {
-		return fmt.Errorf("gagal membuat sheet baru %q: %w", sheetName, err)
+	batchReq := &sheetsapi.BatchUpdateValuesRequest{
+		ValueInputOption: "USER_ENTERED",
+		Data:             data,
 	}
 
-	// Tulis header kolom di baris pertama
-	header := &sheetsapi.ValueRange{
-		Values: [][]interface{}{{"Tanggal", "Jenis", "Kategori", "Jumlah", "Catatan"}},
+	_, err = c.svc.Spreadsheets.Values.BatchUpdate(c.spreadsheetID, batchReq).Context(ctx).Do()
+	if err != nil {
+		return fmt.Errorf("gagal menulis ke sheet %q baris %d: %w", sheetName, row, err)
 	}
-	_, err = c.svc.Spreadsheets.Values.Update(c.spreadsheetID, sheetName+"!A1", header).
-		ValueInputOption("USER_ENTERED").
-		Context(ctx).
-		Do()
-	return err
+	return nil
 }
